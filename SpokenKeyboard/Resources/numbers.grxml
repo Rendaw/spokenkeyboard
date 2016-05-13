@@ -7,7 +7,7 @@
          xsi:schemaLocation="http://www.w3.org/2001/06/grammar http://www.w3.org/TR/speech-grammar/grammar.xsd"
          xml:lang='en-US'
          mode='voice'
-         tag-format='semantics/1.0'
+         tag-format='properties-ms/1.0'
          root='numbers'>
 
   <rule id='zero' scope='public'>zero</rule>

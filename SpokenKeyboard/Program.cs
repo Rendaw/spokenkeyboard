@@ -81,14 +81,10 @@ namespace SpokenKeyboard
                 grammars2.Remove(other.grammar);
                 grammars.Remove(other.name);
             }
-            var doc = new SrgsDocument();
+            var doc = new SrgsDocument(new XmlTextReader(new MemoryStream(Properties.Resources.numbers)));
             var alt = new SrgsOneOf();
             foreach (var rule in rules)
-            {
-                var srgsRule = rule.Value.Build(rule.Key);
-                doc.Rules.Add(srgsRule);
-                alt.Add(new SrgsItem(new SrgsRuleRef(srgsRule)));
-            }
+                alt.Add(new SrgsItem(new SrgsElement[] { rule.Value.Build(doc), new SrgsNameValueTag(rule.Key) }));
             var root = new SrgsRule(Program.InternalMarker + "root", alt);
             doc.Rules.Add(root);
             doc.Root = root;
@@ -126,8 +122,7 @@ namespace SpokenKeyboard
 
         internal static void Parse(SpeechRecognizedEventArgs e)
         {
-            var outer = e.Result.Semantics.First();
-            var name = outer.Key.Substring(Program.InternalMarker.Length);
+            var name = (string)e.Result.Semantics.Value;
             var grammar = grammars2[e.Result.Grammar];
             Response response = grammar.rules[name].Parse(name, e);
             var json = JsonConvert.SerializeObject(response);
@@ -151,18 +146,15 @@ namespace SpokenKeyboard
     public abstract class Rule : Data
     {
         public string start;
-        public abstract SrgsRule Build(string name);
+        public abstract SrgsItem Build(SrgsDocument doc);
         public abstract Response Parse(string name, SpeechRecognizedEventArgs e);
     }
 
     public class VoidRule : Rule
     {
-        public override SrgsRule Build(string name)
+        public override SrgsItem Build(SrgsDocument doc)
         {
-            return new SrgsRule(
-                Program.InternalMarker + name,
-                new SrgsItem(start)
-            );
+            return new SrgsItem(start);
         }
 
         public override Response Parse(string name, SpeechRecognizedEventArgs e)
@@ -231,14 +223,14 @@ namespace SpokenKeyboard
             string tmp = System.IO.Packaging.PackUriHelper.UriSchemePack;
         }
 
-        public override SrgsRule Build(string name)
+        public override SrgsItem Build(SrgsDocument doc)
         {
-            return new SrgsRule(
-                Program.InternalMarker + name,
+            return new SrgsItem(
                 new SrgsElement[]
                 {
                     new SrgsItem(start),
-                    new SrgsRuleRef(new Uri("file://" + Directory.GetCurrentDirectory() + "/numbers.grxml")),
+                    //new SrgsRuleRef(new Uri("numbers.grxml", UriKind.Relative)),
+                    new SrgsRuleRef(doc.Rules["positiveIntegers"]),
                 });
         }
 
@@ -250,6 +242,8 @@ namespace SpokenKeyboard
             bool oh = false;
             foreach (var word in text.Split(' '))
             {
+                if (word == "and") continue;
+
                 if (word == "oh")
                 {
                     oh = true;
@@ -294,10 +288,9 @@ namespace SpokenKeyboard
 
     public class SingleStringRule : Rule
     {
-        public override SrgsRule Build(string name)
+        public override SrgsItem Build(SrgsDocument doc)
         {
-            return new SrgsRule(
-                Program.InternalMarker + name,
+            return new SrgsItem(
                 new SrgsElement[]
                 {
                     new SrgsItem(start),
@@ -354,7 +347,14 @@ namespace SpokenKeyboard
             se.SetInputToDefaultAudioDevice();
             se.SpeechRecognized += delegate (object sender, SpeechRecognizedEventArgs e)
             {
-                NewGrammar.Parse(e);
+                try
+                {
+                    NewGrammar.Parse(e);
+                }
+                catch (Exception x)
+                {
+                    Console.WriteLine(e);
+                }
             };
             new NewGrammar
             {
@@ -363,7 +363,7 @@ namespace SpokenKeyboard
                 {
                     { "void", new VoidRule { start = "testing void", } },
                     { "string", new SingleStringRule { start = "testing string", } },
-                    //{ "integer", new SingleIntegerRule { start = "testing integer", } },
+                    { "integer", new SingleIntegerRule { start = "testing integer", } },
                 },
                 always = false,
             }.Invoke();
@@ -392,7 +392,14 @@ namespace SpokenKeyboard
                             var line = reader.ReadLine();
                             Console.WriteLine("Request: {0}", line);
                             var request = JsonConvert.DeserializeObject<Request>(line, converter);
-                            request.Invoke();
+                            try
+                            {
+                                request.Invoke();
+                            }
+                            catch (Exception e)
+                            {
+                                Console.WriteLine(e);
+                            }
                         }
                     }
                 }
