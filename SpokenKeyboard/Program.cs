@@ -10,12 +10,15 @@ using System.Text;
 using System.Speech.Recognition;
 using System.Threading.Tasks;
 using System.Reflection;
+using System.Speech.Recognition.SrgsGrammar;
+using System.Xml;
+using SpokenKeyboard;
 
 namespace SpokenKeyboard
 {
     public class Context
     {
-        
+
     }
 
     public abstract class Data
@@ -48,28 +51,55 @@ namespace SpokenKeyboard
 
     public abstract class Request : Data
     {
-        public abstract void invoke();
+        public abstract void Invoke();
     }
 
     public class NewGrammar : Request
     {
         public string name;
         public bool always;
-        public List<Rule> rules;
+        public Dictionary<string, Rule> rules;
 
         private Grammar grammar;
 
-        public override void invoke()
+        private static NewGrammar loaded;
+        private static Dictionary<string, NewGrammar> grammars = new Dictionary<string, NewGrammar>();
+        private static Dictionary<Grammar, NewGrammar> grammars2 = new Dictionary<Grammar, NewGrammar>();
+
+        public override void Invoke()
         {
-            if (Program.grammars.ContainsKey(name))
+            if (grammars.ContainsKey(name))
             {
-                Program.se.UnloadGrammar(Program.grammars[name].grammar);
-                Program.grammars.Remove(name);
+                var other = grammars[name];
+                if (loaded == other)
+                {
+                    Program.se.UnloadGrammar(other.grammar);
+                    loaded = null;
+                }
+                else if (other.always)
+                    Program.se.UnloadGrammar(other.grammar);
+                grammars2.Remove(other.grammar);
+                grammars.Remove(other.name);
             }
-            grammar = new Grammar(new GrammarBuilder(new Choices(
-                (from rule in rules select rule.build()).ToArray()
-            )));
-            Program.grammars.Add(name, this);
+            var doc = new SrgsDocument();
+            var alt = new SrgsOneOf();
+            foreach (var rule in rules)
+            {
+                var srgsRule = rule.Value.Build(rule.Key);
+                doc.Rules.Add(srgsRule);
+                alt.Add(new SrgsItem(new SrgsRuleRef(srgsRule)));
+            }
+            var root = new SrgsRule(Program.InternalMarker + "root", alt);
+            doc.Rules.Add(root);
+            doc.Root = root;
+            doc.Debug = true;
+            using (var writer = new XmlTextWriter("out.xml", null))
+            {
+                doc.WriteSrgs(writer);
+            }
+            grammar = new Grammar(doc);
+            grammars.Add(name, this);
+            grammars2.Add(grammar, this);
             Console.WriteLine("Created grammar " + name);
             if (always)
             {
@@ -83,7 +113,28 @@ namespace SpokenKeyboard
             if (always) return;
             Console.WriteLine("Loading grammar " + name);
             Program.se.LoadGrammarAsync(grammar);
-            Program.loaded = grammar;
+            loaded = this;
+        }
+
+        internal static void Load(string name)
+        {
+            if (!grammars.ContainsKey(name)) return;
+            if (loaded != null)
+                Program.se.UnloadGrammar(loaded.grammar);
+            grammars[name].Load();
+        }
+
+        internal static void Parse(SpeechRecognizedEventArgs e)
+        {
+            var outer = e.Result.Semantics.First();
+            var name = outer.Key.Substring(Program.InternalMarker.Length);
+            var grammar = grammars2[e.Result.Grammar];
+            Response response = grammar.rules[name].Parse(name, e);
+            var json = JsonConvert.SerializeObject(response);
+            Console.WriteLine(json);
+            var writer = Program.writer;
+            if (writer != null)
+                writer.WriteAsync(json);
         }
     }
 
@@ -91,297 +142,104 @@ namespace SpokenKeyboard
     {
         public string name;
 
-        public override void invoke()
+        public override void Invoke()
         {
-            if (!Program.grammars.ContainsKey(name)) return;
-            if (Program.loaded != null)
-                Program.se.UnloadGrammar(Program.loaded);
-            Program.grammars[name].Load();
+            NewGrammar.Load(name);
         }
     }
 
     public abstract class Rule : Data
     {
-        public string name;
         public string start;
-        public abstract GrammarBuilder build();
+        public abstract SrgsRule Build(string name);
+        public abstract Response Parse(string name, SpeechRecognizedEventArgs e);
     }
 
     public class VoidRule : Rule
     {
-        public override GrammarBuilder build()
+        public override SrgsRule Build(string name)
         {
-            return new SemanticResultKey(name, new GrammarBuilder(start));
+            return new SrgsRule(
+                Program.InternalMarker + name,
+                new SrgsItem(start)
+            );
+        }
+
+        public override Response Parse(string name, SpeechRecognizedEventArgs e)
+        {
+            return new VoidResponse
+            {
+                name = name,
+            };
         }
     }
 
     public class SingleIntegerRule : Rule
     {
-        private static GrammarBuilder positiveIntegers;
         private static Dictionary<string, long> digits;
 
         static SingleIntegerRule()
         {
-            Dictionary<Func<GrammarBuilder>, GrammarBuilder> cache = new Dictionary<Func<GrammarBuilder>, GrammarBuilder>();
-            Func<Func<GrammarBuilder>, Func<GrammarBuilder>> wrap = delegate (Func<GrammarBuilder> source)
-            {
-                return delegate ()
-                {
-                    if (cache.ContainsKey(source)) return cache[source];
-                    var prod = source();
-                    cache.Add(source, prod);
-                    return prod;
-                };
-            };
-
             digits = new Dictionary<string, long>();
-            Func<string, long, Func<GrammarBuilder>> token = delegate (string name, long value)
+            Func<string, long, int> token = delegate (string name, long value)
             {
                 digits.Add(name, value);
-                return wrap(delegate () { return new GrammarBuilder(name); });
+                return 0;
             };
-            var zero = token("zero", 0);
-            var one = token("one", 1);
-            var two = token("two", 2);
-            var three = token("three", 3);
-            var four = token("four", 4);
-            var five = token("five", 5);
-            var six = token("six", 6);
-            var seven = token("seven", 7);
-            var eight = token("eight", 8);
-            var nine = token("nine", 9);
-            var ohOne = token("oh one", 1);
-            var ohTwo = token("oh two", 2);
-            var ohThree = token("oh three", 3);
-            var ohFour = token("oh four", 4);
-            var ohFive = token("oh five", 5);
-            var ohSix = token("oh six", 6);
-            var ohSeven = token("oh seven", 7);
-            var ohEight = token("oh eight", 8);
-            var ohNine = token("oh nine", 9);
-            var ten = token("ten", 10);
-            var eleven = token("eleven", 11);
-            var twelve = token("twelve", 12);
-            var thirteen = token("thirteen", 13);
-            var fourteen = token("fourteen", 14);
-            var fifteen = token("fifteen", 15);
-            var sixteen = token("sixteen", 16);
-            var seventeen = token("seventeen", 17);
-            var eighteen = token("eighteen", 18);
-            var nineteen = token("nineteen", 19);
-            var twenty = token("twenty", 20);
-            var thirty = token("thirty", 30);
-            var forty = token("forty", 40);
-            var fifty = token("fifty", 50);
-            var sixty = token("sixty", 60);
-            var seventy = token("seventy", 70);
-            var eighty = token("eighty", 80);
-            var ninety = token("ninety", 90);
-            var hundred = token("hundred", 100);
-            var thousand = token("thousand", 1000);
-            var million = token("million", 1000000);
-            var billion = token("billion", 1000000000);
-            var trillion = token("trillion", 1000000000000);
-
-            Func<GrammarBuilder> ones = delegate ()
-            {
-                return new Choices(new GrammarBuilder[]
-                {
-                    one(),
-                    two(),
-                    three(),
-                    four(),
-                    five(),
-                    six(),
-                    seven(),
-                    eight(),
-                    nine(),
-                });
-            };
-            Func<GrammarBuilder> optOnes = wrap(delegate ()
-            {
-                return new GrammarBuilder(ones(), 0, 1);
-            });
-
-            Func<GrammarBuilder> ohOnes = wrap(delegate ()
-            {
-                return new Choices(new GrammarBuilder[]
-                {
-                    ohOne(),
-                    ohTwo(),
-                    ohThree(),
-                    ohFour(),
-                    ohFive(),
-                    ohSix(),
-                    ohSeven(),
-                    ohEight(),
-                    ohNine(),
-                });
-            });
-            Func<GrammarBuilder> optOhOnes = wrap(delegate ()
-            {
-                return new GrammarBuilder(ohOnes(), 0, 1);
-            });
-
-            Func<GrammarBuilder> lowTens = wrap(delegate ()
-            {
-                return new Choices(new GrammarBuilder[]
-                {
-                    ten(),
-                    eleven(),
-                    twelve(),
-                    thirteen(),
-                    fourteen(),
-                    fifteen(),
-                    sixteen(),
-                    seventeen(),
-                    eighteen(),
-                    nineteen(),
-                });
-            });
-
-            Func<GrammarBuilder> highTens = wrap(delegate ()
-            {
-                return new Choices(new GrammarBuilder[]
-                {
-                    twenty(),
-                    thirty(),
-                    forty(),
-                    fifty(),
-                    sixty(),
-                    seventy(),
-                    eighty(),
-                    ninety(),
-                });
-            });
-
-            /*Func<GrammarBuilder> tens = wrap(delegate ()
-            {
-                return new GrammarBuilder(new Choices(new GrammarBuilder[] {
-                    lowTens(),
-                    highTens()
-                }));
-            });
-            Func<GrammarBuilder> optTens = wrap(delegate ()
-            {
-                return new GrammarBuilder(tens(), 0, 1);
-            });*/
-
-            Func<GrammarBuilder> twoDigits = wrap(delegate ()
-            {
-                return new GrammarBuilder(new Choices(new GrammarBuilder[] {
-                    ohOnes(),
-                    lowTens(),
-                    highTens() + optOnes()
-                }));
-            });
-            Func<GrammarBuilder> optTwoDigits = wrap(delegate ()
-            {
-                return new GrammarBuilder(twoDigits(), 0, 1);
-            });
-
-            Func<GrammarBuilder> hundredsDown = wrap(delegate ()
-            {
-                return hundred() +
-                    new GrammarBuilder("and", 0, 1) +
-                    new GrammarBuilder(new Choices(new GrammarBuilder[] {
-                        ones(),
-                        lowTens(),
-                        highTens() + optOnes()
-                    }), 0, 1);
-            });
-            Func<GrammarBuilder> optHundredsDown = wrap(delegate ()
-            {
-                return new GrammarBuilder(hundredsDown(), 0, 1);
-            });
-
-            /*
-            Func<GrammarBuilder> minor = wrap(delegate ()
-            {
-                return ones() + optHundredsDown();
-            });
-
-            Func<GrammarBuilder> thousandsDown = wrap(delegate ()
-            {
-                return thousand() + new GrammarBuilder(minor(), 0, 1);
-            });
-            Func<GrammarBuilder> optThousandsDown = wrap(delegate ()
-            {
-                return new GrammarBuilder(thousandsDown(), 0, 1);
-            });
-
-            Func<GrammarBuilder> millionsDown = wrap(delegate ()
-            {
-                return new GrammarBuilder(new Choices(new GrammarBuilder[]
-                {
-                    million() + new GrammarBuilder(minor() + optThousandsDown(), 0, 1),
-                    thousandsDown(),
-                }));
-            });
-            Func<GrammarBuilder> optMillionsDown = wrap(delegate ()
-            {
-                return new GrammarBuilder(millionsDown(), 0, 1);
-            });
-
-            Func<GrammarBuilder> billionsDown = wrap(delegate ()
-            {
-                return new GrammarBuilder(new Choices(new GrammarBuilder[]
-                {
-                    billion() + new GrammarBuilder(minor() + optMillionsDown(), 0, 1),
-                    millionsDown(),
-                }));
-            });
-            Func<GrammarBuilder> optBillionsDown = wrap(delegate ()
-            {
-                return new GrammarBuilder(billionsDown(), 0, 1);
-            });
-
-            Func<GrammarBuilder> trillionsDown = wrap(delegate ()
-            {
-                return new GrammarBuilder(new Choices(new GrammarBuilder[]
-                {
-                    trillion() + new GrammarBuilder(minor() + optBillionsDown(), 0, 1),
-                    billionsDown(),
-                }));
-            });
-            Func<GrammarBuilder> optTrillionsDown = wrap(delegate ()
-            {
-                return new GrammarBuilder(trillionsDown(), 0, 1);
-            });
-            */
-
-            /*positiveIntegers = new GrammarBuilder(new Choices(new GrammarBuilder[] {
-                zero(),
-                new GrammarBuilder(new Choices(new GrammarBuilder[]
-                {
-                    ones(),
-                    lowTens(),
-                    highTens() + optOnes()
-                })) +
-                new GrammarBuilder(new Choices(new GrammarBuilder[]
-                {
-                    //optTrillionsDown(),
-                    optTwoDigits()
-                })),
-            }));*/
-            positiveIntegers = new GrammarBuilder();
+            token("zero", 0);
+            token("one", 1);
+            token("two", 2);
+            token("three", 3);
+            token("four", 4);
+            token("five", 5);
+            token("six", 6);
+            token("seven", 7);
+            token("eight", 8);
+            token("nine", 9);
+            token("oh one", 1);
+            token("oh two", 2);
+            token("oh three", 3);
+            token("oh four", 4);
+            token("oh five", 5);
+            token("oh six", 6);
+            token("oh seven", 7);
+            token("oh eight", 8);
+            token("oh nine", 9);
+            token("ten", 10);
+            token("eleven", 11);
+            token("twelve", 12);
+            token("thirteen", 13);
+            token("fourteen", 14);
+            token("fifteen", 15);
+            token("sixteen", 16);
+            token("seventeen", 17);
+            token("eighteen", 18);
+            token("nineteen", 19);
+            token("twenty", 20);
+            token("thirty", 30);
+            token("forty", 40);
+            token("fifty", 50);
+            token("sixty", 60);
+            token("seventy", 70);
+            token("eighty", 80);
+            token("ninety", 90);
+            token("hundred", 100);
+            token("thousand", 1000);
+            token("million", 1000000);
+            token("billion", 1000000000);
+            token("trillion", 1000000000000);
             string tmp = System.IO.Packaging.PackUriHelper.UriSchemePack;
-            positiveIntegers.AppendRuleReference(
-                "pack://application:,,,/numbers.grxml",
-                "positiveIntegers"
-            );
         }
 
-        public override GrammarBuilder build()
+        public override SrgsRule Build(string name)
         {
-            return new SemanticResultKey(
-                name, 
-                new GrammarBuilder(start) +
-                new SemanticResultKey(
-                    "singleinteger", 
-                    positiveIntegers
-                )
-            );
+            return new SrgsRule(
+                Program.InternalMarker + name,
+                new SrgsElement[]
+                {
+                    new SrgsItem(start),
+                    new SrgsRuleRef(new Uri("file://" + Directory.GetCurrentDirectory() + "/numbers.grxml")),
+                });
         }
 
         internal static long Parse(string text)
@@ -423,19 +281,37 @@ namespace SpokenKeyboard
             value += minor;
             return value;
         }
+
+        public override Response Parse(string name, SpeechRecognizedEventArgs e)
+        {
+            return new SingleIntegerResponse
+            {
+                name = name,
+                data = Parse(e.Result.Text.Substring(start.Length + 1)),
+            };
+        }
     }
 
     public class SingleStringRule : Rule
     {
-        public string prompt;
-        public override GrammarBuilder build()
+        public override SrgsRule Build(string name)
         {
-            var data = new GrammarBuilder();
-            data.AppendDictation();
-            return new SemanticResultKey(
-                name, 
-                new GrammarBuilder(start) + new SemanticResultKey("singleword", data)
-            );
+            return new SrgsRule(
+                Program.InternalMarker + name,
+                new SrgsElement[]
+                {
+                    new SrgsItem(start),
+                    new SrgsRuleRef(new Uri("grammar:dictation")),
+                });
+        }
+
+        public override Response Parse(string name, SpeechRecognizedEventArgs e)
+        {
+            return new SingleStringResponse
+            {
+                name = name,
+                data = e.Result.Text.Substring(start.Length + 1),
+            };
         }
     }
 
@@ -468,38 +344,34 @@ namespace SpokenKeyboard
 
     class Program
     {
-        public static Dictionary<string, NewGrammar> grammars = new Dictionary<string, NewGrammar>();
-        GrammarBuilder integerGrammar;
         public static SpeechRecognitionEngine se;
         public static StreamWriter writer;
-        internal static Grammar loaded;
-
-        static Program()
-        {
-
-        }
+        public const string InternalMarker = "_";
 
         static void Main(string[] args)
         {
-            Program.se = new SpeechRecognitionEngine();
-            Program.se.SetInputToDefaultAudioDevice();
-            Program.se.SpeechRecognized += SpeechRecognized;
+            se = new SpeechRecognitionEngine();
+            se.SetInputToDefaultAudioDevice();
+            se.SpeechRecognized += delegate (object sender, SpeechRecognizedEventArgs e)
+            {
+                NewGrammar.Parse(e);
+            };
             new NewGrammar
             {
                 name = "test",
-                rules = new List<Rule>
+                rules = new Dictionary<string, Rule>
                 {
-                    new VoidRule { name = "void", start = "testing void", },
-                    new SingleStringRule { name = "string", start = "testing string", },
-                    new SingleIntegerRule { name = "integer", start = "testing integer", },
+                    { "void", new VoidRule { start = "testing void", } },
+                    { "string", new SingleStringRule { start = "testing string", } },
+                    //{ "integer", new SingleIntegerRule { start = "testing integer", } },
                 },
                 always = false,
-            }.invoke();
+            }.Invoke();
             new SwitchGrammar
             {
                 name = "test",
-            }.invoke();
-            Program.se.RecognizeAsync(RecognizeMode.Multiple);
+            }.Invoke();
+            se.RecognizeAsync(RecognizeMode.Multiple);
 
             var server = new TcpListener(IPAddress.Parse("0.0.0.0"), 21147);
             var converter = new JsonConverter();
@@ -520,7 +392,7 @@ namespace SpokenKeyboard
                             var line = reader.ReadLine();
                             Console.WriteLine("Request: {0}", line);
                             var request = JsonConvert.DeserializeObject<Request>(line, converter);
-                            request.invoke();
+                            request.Invoke();
                         }
                     }
                 }
@@ -529,43 +401,6 @@ namespace SpokenKeyboard
                     Console.WriteLine(e);
                 }
             }
-        }
-
-        private static void SpeechRecognized(object sender, SpeechRecognizedEventArgs e)
-        {
-            var outer = e.Result.Semantics.First();
-            var name = outer.Key;
-            Response response;
-            if (outer.Value.ContainsKey("singlestring"))
-            {
-                var data = outer.Value["singlestring"].Value;
-                response = new SingleStringResponse
-                {
-                    name = name,
-                    data = (string)data,
-                };
-            }
-            else if (outer.Value.ContainsKey("singleinteger"))
-            {
-                Console.WriteLine(outer.Value["singleinteger"]);
-                response = new SingleIntegerResponse
-                {
-                    name = name,
-                    data = SingleIntegerRule.Parse((string)outer.Value["singleinteger"].Value),
-                };
-            }
-            else
-            {
-                response = new VoidResponse
-                {
-                    name = name,
-                };
-            }
-            var json = JsonConvert.SerializeObject(response);
-            Console.WriteLine(json);
-            var writer = Program.writer;
-            if (writer != null)
-                writer.WriteAsync(json);
         }
     }
 }
