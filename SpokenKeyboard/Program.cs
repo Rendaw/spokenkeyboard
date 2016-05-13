@@ -343,6 +343,12 @@ namespace SpokenKeyboard
 
         static void Main(string[] args)
         {
+            Uri address = new Uri("tcp://0.0.0.0:21147", UriKind.Absolute);
+            if (args.Length >= 1)
+            {
+                address = new Uri("tcp://" + args[0], UriKind.Absolute);
+            }
+
             se = new SpeechRecognitionEngine();
             se.SetInputToDefaultAudioDevice();
             se.SpeechRecognized += delegate (object sender, SpeechRecognizedEventArgs e)
@@ -353,7 +359,7 @@ namespace SpokenKeyboard
                 }
                 catch (Exception x)
                 {
-                    Console.WriteLine(e);
+                    Console.WriteLine(x);
                 }
             };
             new NewGrammar
@@ -373,10 +379,10 @@ namespace SpokenKeyboard
             }.Invoke();
             se.RecognizeAsync(RecognizeMode.Multiple);
 
-            var server = new TcpListener(IPAddress.Parse("0.0.0.0"), 21147);
+            var server = new TcpListener(IPAddress.Parse(address.Host), address.Port);
             var converter = new JsonConverter();
             server.Start();
-            Console.WriteLine("Listening...");
+            Console.WriteLine("Listening on " + address + "...");
             while (true)
             {
                 try
