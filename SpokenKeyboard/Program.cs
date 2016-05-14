@@ -13,21 +13,12 @@ using System.Reflection;
 using System.Speech.Recognition.SrgsGrammar;
 using System.Xml;
 using SpokenKeyboard;
+using System.Collections;
 
 namespace SpokenKeyboard
 {
-    public class Context
-    {
-
-    }
-
     public abstract class Data
     {
-        public string type;
-        public Data()
-        {
-            type = this.GetType().Name;
-        }
     }
 
     public abstract class Response : Data
@@ -89,10 +80,6 @@ namespace SpokenKeyboard
             doc.Rules.Add(root);
             doc.Root = root;
             doc.Debug = true;
-            using (var writer = new XmlTextWriter("out.xml", null))
-            {
-                doc.WriteSrgs(writer);
-            }
             grammar = new Grammar(doc);
             grammars.Add(name, this);
             grammars2.Add(grammar, this);
@@ -125,7 +112,7 @@ namespace SpokenKeyboard
             var name = (string)e.Result.Semantics.Value;
             var grammar = grammars2[e.Result.Grammar];
             Response response = grammar.rules[name].Parse(name, e);
-            var json = JsonConvert.SerializeObject(response);
+            var json = Program.toJson(response).ToString(Newtonsoft.Json.Formatting.None);
             Console.WriteLine(json);
             var writer = Program.writer;
             if (writer != null)
@@ -238,7 +225,7 @@ namespace SpokenKeyboard
         {
             long value = 0;
             long minor = 0;
-            Console.WriteLine("hey {0}", text);
+            //Console.WriteLine("hey {0}", text);
             bool oh = false;
             foreach (var word in text.Split(' '))
             {
@@ -268,7 +255,7 @@ namespace SpokenKeyboard
                 {
                     minor += number;
                 }
-                Console.WriteLine("word {3} {0}, v {1} m {2}", number, value, minor, word);
+                //Console.WriteLine("word {3} {0}, v {1} m {2}", number, value, minor, word);
 
                 oh = false;
             }
@@ -308,10 +295,14 @@ namespace SpokenKeyboard
         }
     }
 
-    public class JsonConverter : Newtonsoft.Json.Converters.CustomCreationConverter<Request>
+    class Program
     {
-        public Dictionary<string, System.Type> derived;
-        public JsonConverter()
+        public static SpeechRecognitionEngine se;
+        public static StreamWriter writer;
+        public const string InternalMarker = "_";
+
+        private static Dictionary<string, System.Type> derived;
+        static Program()
         {
             derived = (
                 from domainAssembly in AppDomain.CurrentDomain.GetAssemblies()
@@ -321,25 +312,85 @@ namespace SpokenKeyboard
             ).ToDictionary(x => x.Name, x => x);
         }
 
-        public override Request Create(Type objectType)
+        public static object fromJsonProperty(Type type, JToken val)
         {
-            throw new NotImplementedException();
+            if (type == typeof(string)) return (string)val;
+            else if (type == typeof(long)) return (Int64)val;
+            else if (type == typeof(bool)) return (bool)val;
+            else if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
+            {
+                var list = (IList)Activator.CreateInstance(type);
+                foreach (var element in (JContainer)val)
+                    list.Add(fromJsonProperty(type.GenericTypeArguments[0], element));
+                return list;
+            }
+            else if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
+            {
+                var dict = (IDictionary)Activator.CreateInstance(type);
+                foreach (var element in (JObject)val)
+                    dict.Add(element.Key, fromJsonProperty(type.GenericTypeArguments[1], element.Value));
+                return dict;
+            }
+            else if (val is JObject) return fromJson((JObject)val);
+            else throw new NotImplementedException("Cannot deserialize " + type.Name);
         }
 
-        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+        public static object fromJson(JObject source)
         {
-            JObject source = JObject.Load(reader);
-            var target = derived[source.Property("type").ToString()].GetConstructor(Type.EmptyTypes).Invoke(new object[] { });
-            serializer.Populate(source.CreateReader(), target);
+            var typeProp = source.Property("type");
+            if (typeProp == null)
+                throw new ArgumentException(String.Format("[type] missing at {0}", source.Path));
+            var typeName = (string)typeProp.Value;
+            if (!derived.ContainsKey(typeName))
+                throw new ArgumentException("Unknown message type [" + typeName + "]");
+            source.Remove("type");
+            var type = derived[typeName];
+            var target = Activator.CreateInstance(type);
+            foreach (var prop in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (source.Property(prop.Name) == null)
+                    throw new ArgumentNullException(String.Format("Missing [{0}] in [{1}] at [{2}]", prop.Name, type, source.Path));
+                var val = source.Property(prop.Name).Value;
+                source.Remove(prop.Name);
+                prop.SetValue(target, fromJsonProperty(prop.FieldType, val));
+            }
+            var remaining = source.Properties().Select(p => p.Name).ToList();
+            if (remaining.Count > 0)
+                Console.WriteLine(String.Format("WARNING: Unknown properties ({0}) in message", String.Join(", ", remaining)));
             return target;
         }
-    }
 
-    class Program
-    {
-        public static SpeechRecognitionEngine se;
-        public static StreamWriter writer;
-        public const string InternalMarker = "_";
+        public static JToken toJsonProperty(Type type, object val)
+        {
+            if (type == typeof(string)) return new JValue((string)val);
+            else if (type == typeof(long)) return new JValue((Int64)val);
+            else if (type == typeof(bool)) return new JValue((bool)val);
+            else if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
+                return new JArray(
+                    (
+                        from object element in (IList)val
+                        select toJsonProperty(type.GetGenericArguments()[0], element)
+                    ).ToArray());
+            else if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
+            {
+                var obj = new JObject();
+                var elements = ((IDictionary)val).GetEnumerator();
+                while (elements.MoveNext())
+                    obj[(string)elements.Key] = toJsonProperty(type.GetGenericArguments()[1], elements.Value);
+                return obj;
+            }
+            else return toJson(val);
+        }
+
+        public static JObject toJson(object source)
+        {
+            var dest = new JObject();
+            var type = source.GetType();
+            foreach (var prop in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
+                dest[prop.Name] = toJsonProperty(prop.FieldType, prop.GetValue(source));
+            dest["type"] = type.Name;
+            return dest;
+        }
 
         static void Main(string[] args)
         {
@@ -347,6 +398,10 @@ namespace SpokenKeyboard
             if (args.Length >= 1)
             {
                 address = new Uri("tcp://" + args[0], UriKind.Absolute);
+            }
+            else
+            {
+                Console.WriteLine("Using default address (Specify address as first argument)");
             }
 
             se = new SpeechRecognitionEngine();
@@ -362,7 +417,9 @@ namespace SpokenKeyboard
                     Console.WriteLine(x);
                 }
             };
-            new NewGrammar
+
+            Console.WriteLine("Examples:");
+            Process(toJson(new NewGrammar
             {
                 name = "test",
                 rules = new Dictionary<string, Rule>
@@ -372,15 +429,15 @@ namespace SpokenKeyboard
                     { "integer", new SingleIntegerRule { start = "testing integer", } },
                 },
                 always = false,
-            }.Invoke();
-            new SwitchGrammar
+            }).ToString(Newtonsoft.Json.Formatting.None));
+            Process(toJson(new SwitchGrammar
             {
                 name = "test",
-            }.Invoke();
+            }).ToString(Newtonsoft.Json.Formatting.None));
+
             se.RecognizeAsync(RecognizeMode.Multiple);
 
             var server = new TcpListener(IPAddress.Parse(address.Host), address.Port);
-            var converter = new JsonConverter();
             server.Start();
             Console.WriteLine("Listening on " + address + "...");
             while (true)
@@ -396,16 +453,7 @@ namespace SpokenKeyboard
                         while (!reader.EndOfStream)
                         {
                             var line = reader.ReadLine();
-                            Console.WriteLine("Request: {0}", line);
-                            var request = JsonConvert.DeserializeObject<Request>(line, converter);
-                            try
-                            {
-                                request.Invoke();
-                            }
-                            catch (Exception e)
-                            {
-                                Console.WriteLine(e);
-                            }
+                            Process(line);
                         }
                     }
                 }
@@ -413,6 +461,20 @@ namespace SpokenKeyboard
                 {
                     Console.WriteLine(e);
                 }
+            }
+        }
+
+        private static void Process(string line)
+        {
+            Console.WriteLine("Request: {0}", line);
+            var request = (Request)fromJson(JObject.Parse(line));
+            try
+            {
+                request.Invoke();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
             }
         }
     }
