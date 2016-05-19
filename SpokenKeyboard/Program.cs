@@ -48,12 +48,10 @@ namespace SpokenKeyboard
     public class NewGrammar : Request
     {
         public string name;
-        public bool always;
         public Dictionary<string, Rule> rules;
 
         private Grammar grammar;
 
-        private static NewGrammar loaded;
         private static Dictionary<string, NewGrammar> grammars = new Dictionary<string, NewGrammar>();
         private static Dictionary<Grammar, NewGrammar> grammars2 = new Dictionary<Grammar, NewGrammar>();
 
@@ -62,13 +60,7 @@ namespace SpokenKeyboard
             if (grammars.ContainsKey(name))
             {
                 var other = grammars[name];
-                if (loaded == other)
-                {
-                    Program.se.UnloadGrammar(other.grammar);
-                    loaded = null;
-                }
-                else if (other.always)
-                    Program.se.UnloadGrammar(other.grammar);
+                Program.se.UnloadAllGrammars();
                 grammars2.Remove(other.grammar);
                 grammars.Remove(other.name);
             }
@@ -84,39 +76,36 @@ namespace SpokenKeyboard
             grammars.Add(name, this);
             grammars2.Add(grammar, this);
             Console.WriteLine("Created grammar " + name);
-            if (always)
-            {
-                Console.WriteLine("Loading grammar " + name);
-                Program.se.LoadGrammarAsync(grammar);
-            }
         }
 
         internal void Load()
         {
-            if (always) return;
             Console.WriteLine("Loading grammar " + name);
             Program.se.LoadGrammarAsync(grammar);
-            loaded = this;
         }
 
         internal static void Load(string name)
         {
+            Program.se.UnloadAllGrammars();
             if (!grammars.ContainsKey(name)) return;
-            if (loaded != null)
-                Program.se.UnloadGrammar(loaded.grammar);
             grammars[name].Load();
         }
 
         internal static void Parse(SpeechRecognizedEventArgs e)
         {
             var name = (string)e.Result.Semantics.Value;
+            if (!grammars2.ContainsKey(e.Result.Grammar)) return;
             var grammar = grammars2[e.Result.Grammar];
             Response response = grammar.rules[name].Parse(name, e);
             var json = Program.toJson(response).ToString(Newtonsoft.Json.Formatting.None);
             Console.WriteLine(json);
             var writer = Program.writer;
             if (writer != null)
-                writer.WriteAsync(json);
+            {
+                Console.WriteLine("Sending");
+                writer.Write(json + "\n");
+                writer.Flush();
+            }
         }
     }
 
@@ -216,7 +205,6 @@ namespace SpokenKeyboard
                 new SrgsElement[]
                 {
                     new SrgsItem(start),
-                    //new SrgsRuleRef(new Uri("numbers.grxml", UriKind.Relative)),
                     new SrgsRuleRef(doc.Rules["positiveIntegers"]),
                 });
         }
@@ -410,7 +398,10 @@ namespace SpokenKeyboard
             {
                 try
                 {
-                    NewGrammar.Parse(e);
+                    lock (typeof(Program))
+                    {
+                        NewGrammar.Parse(e);
+                    }
                 }
                 catch (Exception x)
                 {
@@ -428,7 +419,6 @@ namespace SpokenKeyboard
                     { "string", new SingleStringRule { start = "testing string", } },
                     { "integer", new SingleIntegerRule { start = "testing integer", } },
                 },
-                always = false,
             }).ToString(Newtonsoft.Json.Formatting.None));
             Process(toJson(new SwitchGrammar
             {
@@ -461,6 +451,7 @@ namespace SpokenKeyboard
                 {
                     Console.WriteLine(e);
                 }
+                writer = null;
             }
         }
 
@@ -470,7 +461,10 @@ namespace SpokenKeyboard
             var request = (Request)fromJson(JObject.Parse(line));
             try
             {
-                request.Invoke();
+                lock (typeof(Program))
+                {
+                    request.Invoke();
+                }
             }
             catch (Exception e)
             {
