@@ -9,7 +9,7 @@ Either build the solution file with Visual Studio or just run spokenkeyboard.exe
 ##Client installation
 Note: currently only Linux is supported
 
-Linux
+###Linux
 
 Run `pip3 install -e https://Rendaw/spokenkeyboard`.
 
@@ -17,7 +17,7 @@ Run `pip3 install -e https://Rendaw/spokenkeyboard`.
 
 Run `spokenkeyboard_client`.
 
-Configuration
+###Configuration
 
 To specify the server host and port and customize your macros, either edit the included `definition.py` or copy it to `~/.config/spokenkeyboard/definition.py` and edit it there.  The configuration should be self explanatory.
 
