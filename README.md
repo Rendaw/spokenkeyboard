@@ -4,6 +4,8 @@ There is a client and server.  The server runs on Windows and connects to the AP
 
 ##Server installation
 
+Binary available here: https://github.com/Rendaw/spokenkeyboard/releases
+
 Either build the solution file with Visual Studio or just run spokenkeyboard.exe.  Unless specified as the first command line parameter, a default interface and port is used.
 
 ##Client installation
