@@ -1,4 +1,5 @@
 import re
+import time
 
 from spokenkeyboard_client.tools import *
 
@@ -111,7 +112,7 @@ base = [
     integer_rule(start='number', action=lambda value: letters(str(value)) ),
     integer_rule(start='snake', action=lambda value: switch_desktop(value) ),
     string_rule(start='garden', action=lambda value: raise_window(value) ),
-    integer_rule(start='rep', action=lambda value: set_repeat(value) ),
+    integer_rule(start='repeat', action=lambda value: [(action.last(), time.sleep(0.005)) for i in range(value)], norepeat=True),
     void_rule(start='tab next', action=lambda: (hold('control'), key('pgdown')) ),
     void_rule(start='tab back', action=lambda: (hold('control'), key('pgup')) ),
     string_rule(start='caps', action=lambda value: (letters(re.sub('(^| ).', lambda x: x.group()[-1:].upper(), value.lower()))) ),
@@ -124,10 +125,9 @@ terminal_rules = [
     void_rule(start='tab new', action=lambda: (hold('control'), letters('T')) ),
 ]
 vim_rules = [
-    integer_rule(start='back word', action=lambda value: (letters(str(value) + 'b')) ),
-    integer_rule(start='next word', action=lambda value: (letters(str(value) + 'w')) ),
-    void_rule(start='nix line', action=lambda: (key('escape'), letters('dd')) ),
-    integer_rule(start='kill lines', action=lambda: (key('escape'), letters(str(value) + 'dd')) ),
+    void_rule(start='back word', action=lambda: (letters('b')) ),
+    void_rule(start='next word', action=lambda: (letters('w')) ),
+    void_rule(start='line kill', action=lambda: (key('escape'), letters('dd')) ),
     void_rule(start='line new', action=lambda: (key('escape'), letters('o')) ),
     void_rule(start='line copy', action=lambda: (key('escape'), letters('yy')) ),
     void_rule(start='external paste', action=lambda: (
@@ -179,9 +179,9 @@ def python_inner(name, text):
         re.sub('\\[', '\\\\[', 
         re.sub('\\]', '\\\\]', 
         text)))
-    python_rules.append(void_rule(start=name, action=lambda: (key('escape'), key('a'), letters(text)) ))
-    python_rules.append(void_rule(start='next ' + name, action=lambda: (key('escape'), key('slash'), letters(quoted), key('enter')) ))
-    python_rules.append(void_rule(start='back ' + name, action=lambda: (key('escape'), key('question'), letters(quoted), key('enter')) ))
+    python_rules.append(void_rule(start=name, action=lambda: (letters(text)) ))
+    python_rules.append(void_rule(start='next ' + name, action=lambda: (key('slash'), letters(quoted), key('enter')) ))
+    python_rules.append(void_rule(start='back ' + name, action=lambda: (key('question'), letters(quoted), key('enter')) ))
 for name, text in python:
     python_inner(name, text)
 grammars.append({
@@ -199,15 +199,17 @@ grammars.append({
         void_rule(start='find', action=lambda: (key('escape'), letters('f')) ),
         void_rule(start='tab new', action=lambda: (key('escape'), letters('tabopen about:blank'), key('enter')) ),
         void_rule(start='tab find', action=lambda: (key('escape'), letters('F')) ),
-        void_rule(start='tab next', action=lambda: (hold('control'), key('pgdown')) ),
-        void_rule(start='tab back', action=lambda: (hold('control'), key('pgup')) ),
-        void_rule(start='tab close', action=lambda: (hold('control'), letters('w')) ),
+        void_rule(start='tab next', action=lambda: (key('escape'), hold('control'), key('pgdown')) ),
+        void_rule(start='tab back', action=lambda: (key('escape'), hold('control'), key('pgup')) ),
+        void_rule(start='tab close', action=lambda: (key('escape'), hold('control'), letters('w')) ),
         void_rule(start='refresh', action=lambda: (hold('control'), key('r')) ),
         void_rule(start='window new', action=lambda: (key('escape'), letters(':winopen about:blank'), key('enter')) ),
         void_rule(start='window find', action=lambda: (key('escape'), letters(';w')) ),
-        void_rule(start='window close', action=lambda: (hold('control'), letters('w')) ),
-        void_rule(start='search', action=lambda: (key('escape'), hold('control'), letters('l')) ),
-        void_rule(start='bookmarks', action=lambda: (key('escape'), hold('control'), letters('b')) ),
+        void_rule(start='address', action=lambda: (key('escape'), hold('control'), letters('l')) ),
+        void_rule(start='copy', action=lambda: (hold('control'), letters('c')) ),
+        void_rule(start='paste', action=lambda: (hold('control'), letters('v')) ),
+        void_rule(start='bookmark show', action=lambda: (key('escape'), hold('control'), letters('b')) ),
+        void_rule(start='bookmark new', action=lambda: (key('escape'), letters(':dialog addbookmark'), key('enter')) ),
     ]
 })
 grammars.append({

@@ -43,6 +43,7 @@ def load():
     common_tools.push_lookup = {}
     common_tools.current_grammar = None
     common_tools.stack = []
+    common_tools.action.last = None
 
     for gi, grammar in enumerate(definition.grammars):
         name = 'grammar' + str(gi)
@@ -57,7 +58,10 @@ def load():
                 'type': rule['type'],
                 'start': rule['start'],
             }
-            rule_lookup[rule_name] = rule['action']
+            rule_lookup[rule_name] = {
+                'action': rule['action'],
+                'norepeat': rule.get('norepeat', False),
+            }
         client.sendLine(json.dumps(send).encode('utf-8'))
         if 'condition' in grammar:
             grammar_lookup.append({
@@ -66,6 +70,20 @@ def load():
             })
         else:
             common_tools.push_lookup[grammar['reference']] = name
+
+def process(data):
+    rule = rule_lookup[data['name']]
+    def inner():
+        action = rule['action']
+        if data['type'] == 'VoidResponse':
+            action()
+        elif data['type'].startswith('Single'):
+            action(data['data'])
+        else:
+            print('unknown rule type', data['name'])
+    inner()
+    if not rule['norepeat']:
+        common_tools.action.last = inner
 
 class Client(LineReceiver):
     delimiter = b'\n'
@@ -105,19 +123,7 @@ class Client(LineReceiver):
 
     def lineReceived(self, line):
         data = json.loads(line.decode('utf-8'))
-        action = rule_lookup[data['name']]
-        reset = common_tools.repeat
-        for i in range(common_tools.repeat):
-            if i != 0:
-                time.sleep(0.01)
-            if data['type'] == 'VoidResponse':
-                action()
-            elif data['type'].startswith('Single'):
-                action(data['data'])
-            else:
-                print('unknown rule type', data['name'])
-        if reset == common_tools.repeat:
-            common_tools.repeat = 1
+        process(data)
 
 class ClientFactory(BaseClientFactory):
     protocol = Client
